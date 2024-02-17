@@ -55,7 +55,7 @@ team_t team = {
 
 /* Read and write a word at address p */
 #define GET(p)              (*(unsigned int *)(p))
-#define PUT(p, val)         (*(unsigned int *)(p) = (size_t)(val))
+#define PUT(p, val)         (*(unsigned int *)(p) = (val))
 
 /* Read the size and allocated fields from address p */
 #define GET_SIZE(p)         (GET(p) & ~0x7)
@@ -69,74 +69,22 @@ team_t team = {
 #define NEXT_BLKP(bp)       ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp)       ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
-#define NEXT_FBLKP(bp)      ((bp))
-#define PREV_FBLKP(bp)      ((bp+4))
-
 static char *heap_listp;
-static list_t free_list;
 
 static void *coalesce(void *bp)
 {
-    // printf("@@@ %p\n", free_list.end);
     size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp))); // 이전블럭이 할당되어있는지 여부를 확인하는 변수
-    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp))); // 다음블럭
-    size_t size = GET_SIZE(HDRP(bp));
-    //printf("coalesce, %p \n", bp);
+    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp))); // 다음블럭  =
+    size_t size = GET_SIZE(HDRP(bp)); 
+
     /* case 1: */
     if (prev_alloc && next_alloc)
     {
-        // printf("!!\n");
-        if (free_list.end != free_list.start) {
-            if (bp < free_list.start) {
-                // 다음 노드의 prev를 나로 변경
-                PUT(PREV_FBLKP(free_list.start), bp);
-                // 지금 노드의 next에 다음노드 주소 저장
-                PUT(NEXT_FBLKP(bp),free_list.start);
-                //start를 나로
-                free_list.start=bp;
-                // 시작 노드의 prev는  end로 써클연결 monster
-                PUT(PREV_FBLKP(bp),free_list.end);
-            }
-            else if (bp > free_list.end) {
-                // printf("!!!!!!!!!\n");
-                // 이전 노드의 next를 나로 변경
-                PUT(NEXT_FBLKP(free_list.end), bp);
-                // 지금 노드의 prev에 이전노드 주소 저장
-                PUT(PREV_FBLKP(bp),free_list.end);
-                //end를 나로
-                free_list.end=bp;
-                // 마지막 노드의 next는 시작점으로 써클연결 monster
-                PUT(NEXT_FBLKP(bp),free_list.start);
-            }
-            else  {
-                // printf("!!!\n");
-                PUT(NEXT_FBLKP(PREV_FBLKP(bp)) , bp);
-                PUT(PREV_FBLKP(NEXT_FBLKP(bp)) , bp);
-                // 여기 
-                PUT(NEXT_FBLKP(bp), NEXT_BLKP(bp));
-                PUT(PREV_FBLKP(bp), PREV_BLKP(bp)); 
-            }
-        }
         return bp;
     }
     /* case 2: */
     else if (prev_alloc && !next_alloc) 
     {
-        // printf("!!\n");
-        char *next = NEXT_BLKP(bp);
-
-        if (bp < free_list.start) {
-            // 여기
-            PUT(NEXT_FBLKP(bp), NEXT_FBLKP(next));
-            PUT(PREV_FBLKP(bp), PREV_FBLKP(next));
-            free_list.start = bp;
-            PUT(NEXT_FBLKP(free_list.end), bp);
-        }
-        else {
-            //여기
-            PUT(NEXT_FBLKP(bp), NEXT_FBLKP(next));
-            PUT(PREV_FBLKP(bp), PREV_FBLKP(next));
-        }
         size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
         PUT(HDRP(bp), PACK(size,0));
         PUT(FTRP(bp), PACK(size,0));
@@ -144,7 +92,6 @@ static void *coalesce(void *bp)
     /* case 3: */
     else if (!prev_alloc && next_alloc) 
     {
-        // printf("!!\n");
         size += GET_SIZE(HDRP(PREV_BLKP(bp)));
         PUT(FTRP(bp), PACK(size,0));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
@@ -153,9 +100,6 @@ static void *coalesce(void *bp)
     /* case 4: */
     else
     {
-        if (NEXT_BLKP(bp) == free_list.end)
-            free_list.end = PREV_BLKP(bp);
-        PUT(NEXT_FBLKP(PREV_BLKP(bp)), NEXT_FBLKP(NEXT_BLKP(bp)));
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) +
             GET_SIZE(FTRP(NEXT_BLKP(bp)));
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
@@ -170,29 +114,16 @@ static void *extend_heap(size_t words)
 {
     char *bp;
     size_t size;
-    
+
     /* Allocate an even number of words to maintain alignment*/
     size = (words % 2) ? (words+1) * WSIZE : words *WSIZE;
     if ((bp = mem_sbrk(size)) == (void *)-1)
         return NULL;
-
-
+    
     /* Initialize free block header/footer and the epilogue header*/
     PUT(HDRP(bp), PACK(size,0));    /* Free block header*/
-    // 
     PUT(FTRP(bp), PACK(size,0));    /* Free block footer*/
-    // printf("%p %p \n", bp, PREV_FBLKP(bp));
-    PUT(NEXT_FBLKP(bp), 1);     /*다음 프리블럭 포인터*/
-    PUT(PREV_FBLKP(bp), 1);     /* 이전 프리블럭 포인터*/
     PUT(HDRP(NEXT_BLKP(bp)), PACK(0,1)); /* New epilogue header*/
-
-    /* case 1 : 처음이면*/
-    if (free_list.start ==NULL && free_list.end == NULL) {
-        free_list.start=free_list.end=bp;
-        PUT(NEXT_FBLKP(bp), bp);
-        PUT(PREV_FBLKP(bp), bp);
-    }
-    /* case 2 : 다음에 가용할 리스트가 있다면?*/
 
     return coalesce(bp);  //코올레스
 
@@ -200,32 +131,19 @@ static void *extend_heap(size_t words)
 
 static void *find_fit(size_t adjust_size)
 {
-    // /* First-fit search*/
-    // void *bp;
-    // //printf("너니??");
-    // for (bp = heap_listp ; GET_SIZE(HDRP(bp)) > 0 ; bp = NEXT_BLKP(bp))
-    // {
-    //     //printf("너니");
-    //     if(!GET_ALLOC(HDRP(bp)) && (adjust_size <= GET_SIZE(HDRP(bp))))
-    //     {
+    /* First-fit search*/
+    void *bp;
+    //printf("너니??");
+    for (bp = heap_listp ; GET_SIZE(HDRP(bp)) > 0 ; bp = NEXT_BLKP(bp))
+    {
+        //printf("너니");
+        if(!GET_ALLOC(HDRP(bp)) && (adjust_size <= GET_SIZE(HDRP(bp))))
+        {
             
-    //         return bp;
-    //     }
-    // }
-    // return NULL; /* No fit */
-
-    /* New search*/
-    char *next=free_list.start;
-
-
-    do {
-        if(adjust_size <= GET_SIZE(HDRP(next))) {
-            return next;
+            return bp;
         }
-        next = NEXT_FBLKP(next);
-    } while (next != free_list.end);
-    
-    return NULL;
+    }
+    return NULL; /* No fit */
 }
 
 static void place(void *bp, size_t adjust_size)
@@ -233,55 +151,18 @@ static void place(void *bp, size_t adjust_size)
     size_t cur_size = GET_SIZE(HDRP(bp));
 
     if ((cur_size - adjust_size) >= (2*DSIZE))
-    {   
-        //printf("남는 공간 충분 place, %p \n", bp);
+    {
         PUT(HDRP(bp), PACK(adjust_size, 1));
         PUT(FTRP(bp), PACK(adjust_size, 1));
         bp=NEXT_BLKP(bp);
         PUT(HDRP(bp), PACK(cur_size - adjust_size, 0));
         PUT(FTRP(bp), PACK(cur_size - adjust_size, 0));
-        
-        // 프리 블록 재생성 -> 프리 블록에게 앞뒤 블록 연결
-        // 빈 블록이 하나일 때 
-        if (free_list.start == PREV_BLKP(bp) && free_list.end == PREV_BLKP(bp)) {
-            //printf("1!!!!!\n");
-            free_list.start = bp;
-            free_list.end = bp;
-            //printf("place%p\n" ,bp);
-
-        }
-        // if 스타트 지점을 옮겨야 할 때
-        else if (free_list.start == PREV_BLKP(bp)) {
-            //printf("2!!!!!\n");
-            free_list.start = bp;
-        }
-        // if 엔드 지점을 옮겨야 할 때
-        else if (free_list.end == PREV_BLKP(bp)) {
-            //printf("3!!!!!\n");
-            free_list.end = bp;
-        }
-
-        PUT(PREV_FBLKP(bp), NEXT_FBLKP(PREV_BLKP(bp)));
-        PUT(NEXT_FBLKP(bp), PREV_FBLKP(NEXT_BLKP(bp)));
-
-        PUT(PREV_FBLKP(NEXT_FBLKP(bp)), bp);
-        PUT(NEXT_FBLKP(PREV_FBLKP(bp)), bp);
     }
     else
     {
-        // 프리 블록 삭제됨 -> 앞뒤 프리 블록 서로 연결
-        //printf("남는 공간 부족 place, %p \n", bp);
         PUT(HDRP(bp), PACK(cur_size, 1));
         PUT(FTRP(bp), PACK(cur_size, 1));
-        if (free_list.start == bp && free_list.end == bp) {
-            free_list.end = NULL;
-            free_list.start = NULL;
-        } else {
-            PUT(PREV_FBLKP(bp), NEXT_FBLKP(bp));
-            PUT(NEXT_FBLKP(bp), PREV_FBLKP(bp));
-        }
     }
-
 }
 
 
@@ -292,11 +173,10 @@ static void place(void *bp, size_t adjust_size)
 int mm_init(void)
 {
     /* Create the initial empty heap*/
-    free_list.start = NULL;
-    free_list.end = NULL;
     
     if ((heap_listp = mem_sbrk(4*WSIZE))== (void *)-1)
         return -1;
+
     PUT(heap_listp,0);  /*Alignment padding*/
     PUT(heap_listp + (1*WSIZE), PACK(DSIZE,1)); /* Prologue header*/
     PUT(heap_listp + (2*WSIZE), PACK(DSIZE,1)); /* Prologue footer*/
@@ -319,7 +199,6 @@ void *mm_malloc(size_t size)
   size_t extend_size; /* Amount to extend heap if no fit */
   char *bp;
 
-    //printf("size = %d\n", size);
   /* Ignore spurious requests*/
   // 미친 테케용
   if (size == 0)
@@ -333,17 +212,17 @@ void *mm_malloc(size_t size)
     //  printf("%d %d\n",adjust_size, size);
     adjust_size = ALIGN(size)+8;  //헤더푸터 추가해줘야되니까 8byte 추가
   }
-
+    
+  
   /* Search the free list for a fit  중요한 부분 */
   if ((bp = find_fit(adjust_size)) != NULL)
   {
-    //printf("find fit, %p %p\n", free_list.start, bp);
     //printf("!!!");
     place(bp, adjust_size);
     return bp;
   }
+
   /* No fit found. Get more memory and place the block*/
-  //printf("Extend heap \n");
   extend_size = MAX(adjust_size, CHUNKSIZE);
   if ((bp = extend_heap(extend_size/WSIZE)) == NULL){
     return NULL;
@@ -359,16 +238,11 @@ void *mm_malloc(size_t size)
 void mm_free(void *bp)
 {
     size_t size = GET_SIZE(HDRP(bp));
+
     PUT(HDRP(bp),PACK(size, 0));
     PUT(FTRP(bp),PACK(size, 0));
-    if (free_list.end == NULL && free_list.start == NULL) {
-        free_list.start = bp;
-        free_list.end = bp;
-    }
-    else {
-        
-    }
     coalesce(bp);
+
 }
 
 /*
